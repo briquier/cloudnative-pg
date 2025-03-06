@@ -175,6 +175,25 @@ func (builder *Builder) WithContainerEnv(name string, env corev1.EnvVar, overwri
 
 	return builder
 }
+func (builder *Builder) WithContainerResources(
+	containerName string,
+	resources corev1.ResourceRequirements,
+	overwrite bool,
+) *Builder {
+	// Parcours la liste des "containers" (pas initContainers)
+	for idx := range builder.status.Spec.Containers {
+		if builder.status.Spec.Containers[idx].Name == containerName {
+			if overwrite {
+				builder.status.Spec.Containers[idx].Resources = resources
+			} else {
+				// Ici tu peux fusionner si besoin, par ex. si tu ne veux pas écraser
+				// complètement l'existant
+			}
+			break
+		}
+	}
+	return builder
+}
 
 // WithServiceAccountName add the provided ServiceAccountName
 func (builder *Builder) WithServiceAccountName(name string, overwrite bool) *Builder {
@@ -340,6 +359,29 @@ func (builder *Builder) WithInitContainerVolumeMount(
 				*volumeMount)
 		}
 	}
+
+	return builder
+}
+
+func (builder *Builder) WithInitContainerResources(
+	name string,
+	resources corev1.ResourceRequirements,
+) *Builder {
+	builder.WithInitContainer(name)
+
+	for idx, value := range builder.status.Spec.InitContainers {
+		if value.Name == name {
+			builder.status.Spec.InitContainers[idx].Resources = resources
+		}
+	}
+
+	//  Browse the list of init containers, not the classic containers
+	//  for idx, container := range builder.status.Spec.InitContainers {
+	//      if container.Name == name {
+	//          builder.status.Spec.InitContainers[idx].Resources = resources
+	//           return builder
+	//      }
+	//  }
 
 	return builder
 }
