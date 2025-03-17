@@ -88,41 +88,11 @@ archives:
   builds:
   - kubectl-cnpg
 
-nfpms:
-  - id: kubectl-cnpg
-    file_name_template: >-
-      kubectl-cnpg_{{ .Version }}_
-      {{- .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ end }}
-    homepage: https://github.com/briquier/cloudnative-pg
-    bindir: /usr/local/bin
-    maintainer: 'Marco Nenciarini <marco.nenciarini@enterprisedb.com>'
-    builds:
-      - kubectl-cnpg
-    formats:
-      - rpm
-      - deb
-    rpm:
-      signature:
-        key_file: gpg_signing_key.asc
-    deb:
-      signature:
-        key_file: gpg_signing_key.asc
-
-checksum:
-  name_template: '{{ .ProjectName }}-{{ .Version }}-checksums.txt'
-
 snapshot:
   version_template: "{{ .Tag }}-next"
 
 changelog:
   disable: true
-
-signs:
-  - artifacts: checksum
-    args: ["--batch", "-u", "{{ .Env.GPG_FINGERPRINT }}", "--output", "${signature}", "--detach-sign", "${artifact}"]
 
 krews:
   - name: cnpg
