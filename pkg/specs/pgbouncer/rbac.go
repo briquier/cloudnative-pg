@@ -51,6 +51,10 @@ func Role(pooler *apiv1.Pooler) *rbacv1.Role {
 			secretNames = append(secretNames, pooler.Status.Secrets.ClientCA.Name)
 		}
 	}
+	if pooler.Spec.LDAP != nil && pooler.Spec.LDAP.Enabled &&
+		pooler.Spec.LDAP.Credentials != nil && pooler.Spec.LDAP.Credentials.SecretName != "" {
+		secretNames = append(secretNames, pooler.Spec.LDAP.Credentials.SecretName)
+	}
 
 	return &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
 		Name: pooler.Name, Namespace: pooler.Namespace,

@@ -356,6 +356,73 @@ spec:
                     - transaction
                     type: string
                 type: object
+              ldap:
+                description: |-
+                  LDAP configuration for PgBouncer client authentication. When enabled,
+                  PgBouncer uses LDAP instead of auth_query. Mutually exclusive with
+                  pgbouncer.authQuery / pgbouncer.authQuerySecret.
+                properties:
+                  baseDN:
+                    description: |-
+                      BaseDN is the base DN for LDAP search (e.g. "dc=example,dc=com").
+                      Required when enabled is true.
+                    type: string
+                  bindDN:
+                    description: |-
+                      BindDN is the DN used to bind to LDAP for the search (e.g. "cn=admin,dc=example,dc=com").
+                      Required when enabled is true.
+                    type: string
+                  credentials:
+                    description: |-
+                      Credentials references the Secret containing bind password for BindDN.
+                      The Secret must contain key "password" or "bindPassword". Required when enabled is true.
+                    properties:
+                      secretName:
+                        description: |-
+                          Name of the Secret in the same namespace as the Pooler.
+                          Expected key: "password" or "bindPassword".
+                        type: string
+                    type: object
+                  enabled:
+                    default: false
+                    description: |-
+                      Enable LDAP authentication. When true, auth_query is ignored and
+                      PgBouncer uses LDAP for client authentication. Default: false.
+                    type: boolean
+                  host:
+                    description: |-
+                      Host is the LDAP server hostname or IP (e.g. "ldap.example.com").
+                      Required when enabled is true.
+                    type: string
+                  port:
+                    default: 389
+                    description: |-
+                      Port is the LDAP server port. Default: 389 (636 for LDAPS when TLS is enabled).
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  searchFilter:
+                    default: "(uid=%u)"
+                    description: |-
+                      SearchFilter is the LDAP filter for user lookup. Use %u for the client username.
+                      Default: "(uid=%u)".
+                    type: string
+                  tls:
+                    description: TLS configures LDAP connection TLS (StartTLS or LDAPS).
+                    properties:
+                      enabled:
+                        default: false
+                        description: |-
+                          Enable TLS for LDAP (StartTLS or LDAPS depending on port). Default: false.
+                        type: boolean
+                      skipVerify:
+                        default: false
+                        description: |-
+                          SkipVerify disables verification of the LDAP server certificate. Default: false.
+                        type: boolean
+                    type: object
+                type: object
               serviceTemplate:
                 description: Template for the Service to be created
                 properties:

@@ -21,6 +21,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	apiv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 
@@ -137,5 +138,217 @@ var _ = Describe("Pooler validation", func() {
 			},
 		}
 		Expect(v.validatePgbouncerGenericParameters(pooler)).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Pooler LDAP validation", func() {
+	var v *PoolerCustomValidator
+	BeforeEach(func() {
+		v = &PoolerCustomValidator{}
+	})
+
+	It("rejects LDAP enabled with auth_query set", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BaseDN:     "dc=example,dc=com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		pooler.Spec.PgBouncer.AuthQuery = "SELECT 1"
+		pooler.Spec.PgBouncer.AuthQuerySecret = &apiv1.LocalObjectReference{Name: "auth-secret"}
+		Expect(v.validateLDAP(pooler)).NotTo(BeEmpty())
+		Expect(v.validateLDAP(pooler)[0].Detail).To(ContainSubstring("mutually exclusive"))
+	})
+
+	It("rejects LDAP enabled when host is missing", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					BaseDN:     "dc=example,dc=com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).NotTo(BeEmpty())
+	})
+
+	It("rejects LDAP enabled when credentials.secretName is missing", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled: true,
+					Host:    "ldap.example.com",
+					BaseDN:  "dc=example,dc=com",
+					BindDN:  "cn=admin,dc=example,dc=com",
+				},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).NotTo(BeEmpty())
+	})
+
+	It("accepts valid LDAP config when enabled", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BaseDN:     "dc=example,dc=com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).To(BeEmpty())
+	})
+
+	It("does not validate LDAP when ldap is nil or disabled", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).To(BeEmpty())
+		pooler.Spec.LDAP = &apiv1.PoolerLDAPConfig{Enabled: false}
+		Expect(v.validateLDAP(pooler)).To(BeEmpty())
+	})
+
+	It("rejects LDAP enabled when baseDN is missing", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).NotTo(BeEmpty())
+	})
+
+	It("rejects LDAP enabled when bindDN is missing", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BaseDN:     "dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		Expect(v.validateLDAP(pooler)).NotTo(BeEmpty())
+	})
+})
+
+var _ = Describe("Pooler full validation with LDAP", func() {
+	var v *PoolerCustomValidator
+	BeforeEach(func() {
+		v = &PoolerCustomValidator{}
+	})
+
+	It("accepts valid Pooler with LDAP enabled (validate returns no errors)", func() {
+		pooler := &apiv1.Pooler{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-pooler"},
+			Spec: apiv1.PoolerSpec{
+				Cluster:   apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BaseDN:     "dc=example,dc=com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		Expect(v.validate(pooler)).To(BeEmpty())
+	})
+
+	It("rejects Pooler with LDAP and auth_query set (validate returns errors)", func() {
+		pooler := &apiv1.Pooler{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-pooler"},
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "my-cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					AuthQuery: "SELECT 1",
+					AuthQuerySecret: &apiv1.LocalObjectReference{Name: "auth-secret"},
+				},
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:    true,
+					Host:       "ldap.example.com",
+					BaseDN:     "dc=example,dc=com",
+					BindDN:     "cn=admin,dc=example,dc=com",
+					Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+				},
+			},
+		}
+		errs := v.validate(pooler)
+		Expect(errs).NotTo(BeEmpty())
+		Expect(errs.ToAggregate().Error()).To(ContainSubstring("mutually exclusive"))
+	})
+})
+
+var _ = Describe("Pooler LDAP defaulting", func() {
+	It("sets port and searchFilter when LDAP enabled and not set", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled: true,
+					Host:    "ldap.example.com",
+				},
+			},
+		}
+		setPoolerLDAPDefaults(pooler)
+		Expect(pooler.Spec.LDAP.Port).NotTo(BeNil())
+		Expect(*pooler.Spec.LDAP.Port).To(Equal(int32(apiv1.DefaultLDAPPort)))
+		Expect(pooler.Spec.LDAP.SearchFilter).To(Equal(apiv1.DefaultLDAPSearchFilter))
+	})
+
+	It("does not overwrite port or searchFilter when already set", func() {
+		customPort := int32(636)
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				LDAP: &apiv1.PoolerLDAPConfig{
+					Enabled:      true,
+					Port:         ptr.To(customPort),
+					SearchFilter: "(cn=%u)",
+				},
+			},
+		}
+		setPoolerLDAPDefaults(pooler)
+		Expect(*pooler.Spec.LDAP.Port).To(Equal(customPort))
+		Expect(pooler.Spec.LDAP.SearchFilter).To(Equal("(cn=%u)"))
+	})
+
+	It("does nothing when LDAP is nil or disabled", func() {
+		pooler := &apiv1.Pooler{Spec: apiv1.PoolerSpec{}}
+		setPoolerLDAPDefaults(pooler)
+		Expect(pooler.Spec.LDAP).To(BeNil())
+
+		pooler.Spec.LDAP = &apiv1.PoolerLDAPConfig{Enabled: false}
+		setPoolerLDAPDefaults(pooler)
+		Expect(pooler.Spec.LDAP.Port).To(BeNil())
+		Expect(pooler.Spec.LDAP.SearchFilter).To(BeEmpty())
 	})
 })

@@ -43,6 +43,11 @@ const (
 
 	// DefaultPgBouncerPoolerAuthQuery is the default auth_query for PgBouncer
 	DefaultPgBouncerPoolerAuthQuery = "SELECT usename, passwd FROM public.user_search($1)"
+
+	// DefaultLDAPPort is the default LDAP port (non-TLS).
+	DefaultLDAPPort = 389
+	// DefaultLDAPSearchFilter is the default LDAP filter for user search.
+	DefaultLDAPSearchFilter = "(uid=%u)"
 )
 
 // PgBouncerPoolMode is the mode of PgBouncer
@@ -79,6 +84,12 @@ type PoolerSpec struct {
 
 	// The PgBouncer configuration
 	PgBouncer *PgBouncerSpec `json:"pgbouncer"`
+
+	// LDAP configuration for PgBouncer client authentication. When enabled,
+	// PgBouncer uses LDAP instead of auth_query. Mutually exclusive with
+	// pgbouncer.authQuery / pgbouncer.authQuerySecret.
+	// +optional
+	LDAP *PoolerLDAPConfig `json:"ldap,omitempty"`
 
 	// The deployment strategy to use for pgbouncer to replace existing pods with new ones
 	// +optional
@@ -137,6 +148,76 @@ type PodTemplateSpec struct {
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	// +optional
 	Spec corev1.PodSpec `json:"spec,omitempty"`
+}
+
+// PoolerLDAPConfig holds LDAP authentication settings for PgBouncer.
+// When enabled, PgBouncer will use auth_type=ldap and validate client
+// credentials against the configured LDAP server. LDAP is mutually
+// exclusive with spec.pgbouncer.authQuery / authQuerySecret.
+type PoolerLDAPConfig struct {
+	// Enable LDAP authentication. When true, auth_query is ignored and
+	// PgBouncer uses LDAP for client authentication. Default: false.
+	// +kubebuilder:default:=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Host is the LDAP server hostname or IP (e.g. "ldap.example.com").
+	// Required when enabled is true.
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// Port is the LDAP server port. Default: 389 (636 for LDAPS when TLS is enabled).
+	// +kubebuilder:default:=389
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	Port *int32 `json:"port,omitempty"`
+
+	// BaseDN is the base DN for LDAP search (e.g. "dc=example,dc=com").
+	// Required when enabled is true.
+	// +optional
+	BaseDN string `json:"baseDN,omitempty"`
+
+	// BindDN is the DN used to bind to LDAP for the search (e.g. "cn=admin,dc=example,dc=com").
+	// Required when enabled is true.
+	// +optional
+	BindDN string `json:"bindDN,omitempty"`
+
+	// SearchFilter is the LDAP filter for user lookup. Use %u for the client username.
+	// Default: "(uid=%u)".
+	// +kubebuilder:default:="(uid=%u)"
+	// +optional
+	SearchFilter string `json:"searchFilter,omitempty"`
+
+	// TLS configures LDAP connection TLS (StartTLS or LDAPS).
+	// +optional
+	TLS *PoolerLDAPTLSConfig `json:"tls,omitempty"`
+
+	// Credentials references the Secret containing bind password for BindDN.
+	// The Secret must contain key "password" or "bindPassword". Required when enabled is true.
+	// +optional
+	Credentials *PoolerLDAPCredentials `json:"credentials,omitempty"`
+}
+
+// PoolerLDAPTLSConfig holds TLS options for the LDAP connection.
+type PoolerLDAPTLSConfig struct {
+	// Enable TLS for LDAP (StartTLS or LDAPS depending on port). Default: false.
+	// +kubebuilder:default:=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// SkipVerify disables verification of the LDAP server certificate. Default: false.
+	// +kubebuilder:default:=false
+	// +optional
+	SkipVerify bool `json:"skipVerify,omitempty"`
+}
+
+// PoolerLDAPCredentials references the Kubernetes Secret holding LDAP bind credentials.
+type PoolerLDAPCredentials struct {
+	// Name of the Secret in the same namespace as the Pooler.
+	// Expected key: "password" or "bindPassword".
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
 }
 
 // ServiceTemplateSpec is a structure allowing the user to set

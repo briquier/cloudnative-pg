@@ -157,17 +157,32 @@ build-plugin-race: generate fmt vet ## Build plugin binary.
 run: generate fmt vet manifests ## Run against the configured Kubernetes cluster in ~/.kube/config.
 	go run ./cmd/manager
 
-docker-build: go-releaser ## Build the docker image.
+# Build and push the controller image. CONTROLLER_IMG must be a registry you can push to
+# (e.g. ghcr.io/USER/cloudnative-pg:TAG or docker.io/USER/cloudnative-pg:TAG).
+# Do not use docker.io/library/... (reserved; push will fail with "authorization failed").
+docker-build: go-releaser ## Build and push the docker image.
+	@if echo "$${CONTROLLER_IMG}" | grep -q '^docker.io/library/'; then \
+	  echo "ERROR: CONTROLLER_IMG cannot be docker.io/library/... (reserved namespace)."; \
+	  echo "Use e.g. IMAGE_NAME=docker.io/YOUR_USERNAME/cloudnative-pg make docker-build"; exit 1; \
+	fi; \
 	GOOS=linux GOARCH=${ARCH} GOPATH=$(go env GOPATH) DATE=${DATE} COMMIT=${COMMIT} VERSION=${VERSION} \
 	  $(GO_RELEASER) build --skip=validate --clean --single-target $(if $(VERSION),,--snapshot); \
 	builder_name_option=""; \
 	if [ -n "${BUILDER_NAME}" ]; then \
 	  builder_name_option="--builder ${BUILDER_NAME}"; \
 	fi; \
-	DOCKER_BUILDKIT=1 buildVersion=${VERSION} revision=${COMMIT} \
+	DOCKER_BUILDKIT=1 buildVersion=${VERSION} revision=${COMMIT} CONTROLLER_IMG="$${CONTROLLER_IMG}" \
 	  docker buildx bake $${builder_name_option} --set=*.platform="linux/${ARCH}" \
 	  --set distroless.tags="$${CONTROLLER_IMG}" \
 	  --push distroless
+
+# Build the controller image and load it into the local Docker daemon (no push).
+# Override with LOCAL_IMG=e.g. myregistry/myimage:tag (default: $(IMAGE_NAME):local).
+docker-build-local: go-releaser ## Build the docker image and load it locally (no push).
+	GOOS=linux GOARCH=${ARCH} GOPATH=$(go env GOPATH) DATE=${DATE} COMMIT=${COMMIT} VERSION=${VERSION} \
+	  $(GO_RELEASER) build --skip=validate --clean --single-target $(if $(VERSION),,--snapshot); \
+	DOCKER_BUILDKIT=1 docker buildx build --platform=linux/$(ARCH) --load \
+	  -t $(or $(LOCAL_IMG),$(IMAGE_NAME):local) -f Dockerfile .
 
 olm-bundle: manifests kustomize operator-sdk ## Build the bundle for OLM installation
 	set -xeEuo pipefail ;\

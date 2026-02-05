@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -101,7 +102,42 @@ var poolerLog = log.WithName("pooler-resource").WithValues("version", "v1")
 func SetupPoolerWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&apiv1.Pooler{}).
 		WithValidator(newBypassableValidator(&PoolerCustomValidator{})).
+		WithDefaulter(&PoolerCustomDefaulter{}).
 		Complete()
+}
+
+// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
+// +kubebuilder:webhook:webhookVersions={v1},admissionReviewVersions={v1},path=/mutate-postgresql-cnpg-io-v1-pooler,mutating=true,failurePolicy=fail,groups=postgresql.cnpg.io,resources=poolers,verbs=create;update,versions=v1,name=mpooler.cnpg.io,sideEffects=None
+
+// PoolerCustomDefaulter sets default values for the Pooler resource (e.g. LDAP port and searchFilter).
+type PoolerCustomDefaulter struct{}
+
+var _ webhook.CustomDefaulter = &PoolerCustomDefaulter{}
+
+// Default implements webhook.CustomDefaulter so a webhook will be registered for the type Pooler.
+func (d *PoolerCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
+	pooler, ok := obj.(*apiv1.Pooler)
+	if !ok {
+		return fmt.Errorf("expected a Pooler object but got %T", obj)
+	}
+	poolerLog.Info("Defaulting for Pooler", "name", pooler.GetName(), "namespace", pooler.GetNamespace())
+
+	setPoolerLDAPDefaults(pooler)
+	return nil
+}
+
+// setPoolerLDAPDefaults applies default values for spec.ldap when LDAP is enabled.
+func setPoolerLDAPDefaults(pooler *apiv1.Pooler) {
+	if pooler.Spec.LDAP == nil || !pooler.Spec.LDAP.Enabled {
+		return
+	}
+	ldap := pooler.Spec.LDAP
+	if ldap.Port == nil {
+		ldap.Port = ptr.To(int32(apiv1.DefaultLDAPPort))
+	}
+	if ldap.SearchFilter == "" {
+		ldap.SearchFilter = apiv1.DefaultLDAPSearchFilter
+	}
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
@@ -245,7 +281,61 @@ func (v *PoolerCustomValidator) validateCluster(r *apiv1.Pooler) field.ErrorList
 func (v *PoolerCustomValidator) validate(r *apiv1.Pooler) (allErrs field.ErrorList) {
 	allErrs = append(allErrs, v.validatePgBouncer(r)...)
 	allErrs = append(allErrs, v.validateCluster(r)...)
+	allErrs = append(allErrs, v.validateLDAP(r)...)
 	return allErrs
+}
+
+// validateLDAP checks LDAP configuration: mutual exclusivity with auth_query and required fields when enabled.
+func (v *PoolerCustomValidator) validateLDAP(r *apiv1.Pooler) field.ErrorList {
+	var result field.ErrorList
+	ldap := r.Spec.LDAP
+
+	if ldap == nil || !ldap.Enabled {
+		return result
+	}
+
+	// LDAP and auth_query are mutually exclusive
+	hasAuthQuery := r.Spec.PgBouncer != nil && (
+		r.Spec.PgBouncer.AuthQuery != "" ||
+			(r.Spec.PgBouncer.AuthQuerySecret != nil && r.Spec.PgBouncer.AuthQuerySecret.Name != ""))
+	if hasAuthQuery {
+		result = append(result,
+			field.Invalid(
+				field.NewPath("spec", "ldap"),
+				ldap.Enabled,
+				"LDAP authentication and auth_query are mutually exclusive: when spec.ldap.enabled is true, "+
+					"do not set spec.pgbouncer.authQuery or spec.pgbouncer.authQuerySecret"))
+		return result
+	}
+
+	// Required fields when LDAP is enabled
+	if ldap.Host == "" {
+		result = append(result,
+			field.Required(
+				field.NewPath("spec", "ldap", "host"),
+				"LDAP host is required when spec.ldap.enabled is true (e.g. ldap.example.com)"))
+	}
+	if ldap.BaseDN == "" {
+		result = append(result,
+			field.Required(
+				field.NewPath("spec", "ldap", "baseDN"),
+				"LDAP baseDN is required when spec.ldap.enabled is true (e.g. dc=example,dc=com)"))
+	}
+	if ldap.BindDN == "" {
+		result = append(result,
+			field.Required(
+				field.NewPath("spec", "ldap", "bindDN"),
+				"LDAP bindDN is required when spec.ldap.enabled is true (e.g. cn=admin,dc=example,dc=com)"))
+	}
+	if ldap.Credentials == nil || ldap.Credentials.SecretName == "" {
+		result = append(result,
+			field.Required(
+				field.NewPath("spec", "ldap", "credentials", "secretName"),
+				"LDAP credentials.secretName is required when spec.ldap.enabled is true: "+
+					"reference a Secret containing the bind password (key: password or bindPassword)"))
+	}
+
+	return result
 }
 
 // validatePgbouncerGenericParameters validates pgbouncer parameters
