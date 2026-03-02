@@ -104,6 +104,19 @@ func Role(pooler *apiv1.Pooler) *rbacv1.Role {
 			},
 			ResourceNames: secretNames,
 		},
+		{
+			APIGroups: []string{
+				"",
+			},
+			Resources: []string{
+				"endpoints",
+			},
+			Verbs: []string{
+				"get",
+				"list",
+				"watch",
+			},
+		},
 	}}
 }
 

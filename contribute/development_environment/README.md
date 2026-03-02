@@ -208,5 +208,15 @@ Now that your system has been validated, you can tear down the local cluster wit
 ./hack/setup-cluster.sh destroy
 ```
 
+### Testing specific features
+
+After `./hack/setup-cluster.sh create load deploy`, you can run manual or E2E tests:
+
+- **PgBouncer peering (cancel request forwarding):** see
+  [Testing PgBouncer peering](testing_pgbouncer_peering.md) for step-by-step
+  verification of the headless service, Endpoints, and `[peers]` config.
+- **Full E2E suite:** `make e2e-test` (recreates cluster and runs all E2E tests)
+  or `make e2e-test-existing-cluster` to run E2E against your current context.
+
 Congratulations, you have a suitable development environment. You are now able
 to contribute your patches to CloudNativePG!

@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apiv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
+	"github.com/cloudnative-pg/cloudnative-pg/pkg/specs/pgbouncer"
 )
 
 // poolerManagedResources contains all the resources that are going to be
@@ -57,6 +58,9 @@ type poolerManagedResources struct {
 
 	// This is the service where pgbouncer is accessible
 	Service *corev1.Service
+
+	// This is the headless service used for PgBouncer peer discovery
+	HeadlessService *corev1.Service
 
 	// The referenced Cluster
 	Cluster *apiv1.Cluster
@@ -149,6 +153,16 @@ func (r *PoolerReconciler) getManagedResources(
 	// Get the service deployment
 	result.Service, err = getServiceOrNil(
 		ctx, r.Client, client.ObjectKey{Name: pooler.Name, Namespace: pooler.Namespace})
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the headless service for peer discovery
+	result.HeadlessService, err = getServiceOrNil(
+		ctx, r.Client, client.ObjectKey{
+			Name:      pooler.Name + pgbouncer.HeadlessServiceSuffix,
+			Namespace: pooler.Namespace,
+		})
 	if err != nil {
 		return nil, err
 	}

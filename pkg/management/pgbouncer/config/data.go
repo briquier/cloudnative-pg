@@ -23,6 +23,27 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// MaxPeerID is the maximum value allowed by PgBouncer for peer_id (0 disables peering).
+// See https://www.pgbouncer.org/config.html
+const MaxPeerID = 16383
+
+// PeerInfo represents a PgBouncer peer instance for the [peers] configuration section.
+// This enables cancel-request forwarding between PgBouncer instances
+// deployed behind a load-balanced Kubernetes Service.
+type PeerInfo struct {
+	ID   int
+	Host string
+	Port int
+}
+
+// PeeringInfo contains all the information needed to generate the
+// [peers] section and set the peer_id in the PgBouncer configuration.
+// When nil, peering is disabled (single-instance mode).
+type PeeringInfo struct {
+	PeerID int
+	Peers  []PeerInfo
+}
+
 // Secrets is the set of data that is needed to compute a PgBouncer configuration
 type Secrets struct {
 	// The secret containing the credentials to be used to execute the auth_query queries.

@@ -91,6 +91,12 @@ auth_query = {{ .AuthQuery }}
 auth_dbname = {{ .AuthDBName }}
 
 {{ .Parameters -}}
+{{ if .Peers }}
+[peers]
+{{ range $peer := .Peers -}}
+{{ $peer.ID }} = host={{ $peer.Host }} port={{ $peer.Port }}
+{{ end -}}
+{{ end -}}
 `
 	pgbouncerHBAFileTemplateString = `
 local pgbouncer pgbouncer peer
@@ -143,8 +149,9 @@ var (
 )
 
 // BuildConfigurationFiles create the config files containing the pgbouncer configuration and
-// the users file
-func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (ConfigurationFiles, error) {
+// the users file. When peering is non-nil, the [peers] section and peer_id parameter
+// are added to enable cancel-request forwarding between PgBouncer instances.
+func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets, peering *PeeringInfo) (ConfigurationFiles, error) {
 	files := make(map[string][]byte)
 	var pgbouncerIni bytes.Buffer
 	var pgbouncerUserList bytes.Buffer
@@ -206,6 +213,18 @@ func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (Configurat
 		parameters["server_tls_key_file"] = serverTLSKeyPath
 	}
 
+	var peers []PeerInfo
+	if peering != nil && peering.PeerID >= 1 && peering.PeerID <= MaxPeerID {
+		parameters["peer_id"] = fmt.Sprintf("%d", peering.PeerID)
+		// Only include valid peers so we never write a malformed [peers] entry
+		// (e.g. ID 0 or empty host would cause PgBouncer "dropping peer  as it does not exist anymore").
+		for _, p := range peering.Peers {
+			if p.ID >= 1 && p.ID <= MaxPeerID && p.Host != "" {
+				peers = append(peers, p)
+			}
+		}
+	}
+
 	templateData := struct {
 		Pooler            *apiv1.Pooler
 		AuthQuery         string
@@ -214,6 +233,7 @@ func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (Configurat
 		AuthDBName        string
 		Parameters        string
 		PgHba             []string
+		Peers             []PeerInfo
 	}{
 		Pooler:            pooler,
 		AuthQuery:         pooler.GetAuthQuery(),
@@ -229,6 +249,7 @@ func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (Configurat
 		// to be stable.
 		Parameters: stringifyPgBouncerParameters(parameters),
 		PgHba:      pooler.Spec.PgBouncer.PgHBA,
+		Peers:      peers,
 	}
 
 	if err := pgBouncerIniTemplate.Execute(&pgbouncerIni, templateData); err != nil {

@@ -92,6 +92,13 @@ var AllowedPgbouncerGenericConfigurationParameters = stringset.From([]string{
 	"verbose",
 })
 
+// ReservedPgbouncerParameters are managed by the operator (e.g. peer_id for cancel-request
+// forwarding) and must not be set by the user. They are not in the allowed list above,
+// so they are already rejected; this set is for clearer error messages.
+var ReservedPgbouncerParameters = stringset.From([]string{
+	"peer_id",
+})
+
 // poolerLog is for logging in this package.
 var poolerLog = log.WithName("pooler-resource").WithValues("version", "v1")
 
@@ -246,10 +253,14 @@ func (v *PoolerCustomValidator) validatePgbouncerGenericParameters(r *apiv1.Pool
 
 	for param := range r.Spec.PgBouncer.Parameters {
 		if !AllowedPgbouncerGenericConfigurationParameters.Has(param) {
+			msg := "Invalid or reserved parameter"
+			if ReservedPgbouncerParameters.Has(param) {
+				msg = "parameter is managed by the operator and cannot be set (e.g. for peer discovery)"
+			}
 			result = append(result,
 				field.Invalid(
-					field.NewPath("spec", "cluster", "parameters"),
-					param, "Invalid or reserved parameter"))
+					field.NewPath("spec", "pgbouncer", "parameters"),
+					param, msg))
 		}
 	}
 	return result

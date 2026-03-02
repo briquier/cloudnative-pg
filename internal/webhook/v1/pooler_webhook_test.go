@@ -138,4 +138,17 @@ var _ = Describe("Pooler validation", func() {
 		}
 		Expect(v.validatePgbouncerGenericParameters(pooler)).To(BeEmpty())
 	})
+
+	It("rejects peer_id as it is managed by the operator for peer discovery", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				PgBouncer: &apiv1.PgBouncerSpec{
+					Parameters: map[string]string{"peer_id": "12345"},
+				},
+			},
+		}
+		errs := v.validatePgbouncerGenericParameters(pooler)
+		Expect(errs).To(HaveLen(1))
+		Expect(errs[0].Detail).To(ContainSubstring("managed by the operator"))
+	})
 })

@@ -112,6 +112,12 @@ func Deployment(pooler *apiv1.Pooler, cluster *apiv1.Cluster) (*appsv1.Deploymen
 		}, true).
 		WithContainerEnv("pgbouncer", corev1.EnvVar{Name: "NAMESPACE", Value: pooler.Namespace}, true).
 		WithContainerEnv("pgbouncer", corev1.EnvVar{Name: "POOLER_NAME", Value: pooler.Name}, true).
+		WithContainerEnv("pgbouncer", corev1.EnvVar{
+			Name: "POD_IP",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			},
+		}, true).
 		WithContainerEnv("pgbouncer", corev1.EnvVar{Name: "PGUSER", Value: "pgbouncer"}, false).
 		WithContainerEnv("pgbouncer", corev1.EnvVar{Name: "PGDATABASE", Value: "pgbouncer"}, false).
 		WithContainerEnv("pgbouncer", corev1.EnvVar{Name: "PGHOST", Value: "/controller/run"}, false).

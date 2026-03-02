@@ -59,6 +59,10 @@ func (r *PoolerReconciler) updateOwnedObjects(
 		return err
 	}
 
+	if err := r.reconcileHeadlessService(ctx, pooler, resources); err != nil {
+		return err
+	}
+
 	return createOrPatchPodMonitor(ctx, r.Client, r.DiscoveryClient, pgbouncer.NewPoolerPodMonitorManager(pooler))
 }
 
@@ -161,6 +165,43 @@ func (r *PoolerReconciler) reconcileService(
 	contextLog.Info("Updating the service metadata")
 
 	return r.Patch(ctx, patchedService, client.MergeFrom(resources.Service))
+}
+
+// reconcileHeadlessService update or create the pgbouncer headless service
+// used for peer discovery and cancel-request forwarding
+func (r *PoolerReconciler) reconcileHeadlessService(
+	ctx context.Context,
+	pooler *apiv1.Pooler,
+	resources *poolerManagedResources,
+) error {
+	contextLog := log.FromContext(ctx)
+	expectedService := pgbouncer.HeadlessService(pooler, resources.Cluster)
+	if err := ctrl.SetControllerReference(pooler, expectedService, r.Scheme); err != nil {
+		return err
+	}
+
+	if resources.HeadlessService == nil {
+		contextLog.Info("Creating the headless service for peer discovery")
+		err := r.Create(ctx, expectedService)
+		if err != nil && !apierrs.IsAlreadyExists(err) {
+			return err
+		}
+		resources.HeadlessService = expectedService
+		return nil
+	}
+
+	patchedService := resources.HeadlessService.DeepCopy()
+	patchedService.Spec = expectedService.Spec
+	utils.MergeObjectsMetadata(patchedService, expectedService)
+
+	if reflect.DeepEqual(patchedService.ObjectMeta, resources.HeadlessService.ObjectMeta) &&
+		reflect.DeepEqual(patchedService.Spec, resources.HeadlessService.Spec) {
+		return nil
+	}
+
+	contextLog.Info("Updating the headless service metadata")
+
+	return r.Patch(ctx, patchedService, client.MergeFrom(resources.HeadlessService))
 }
 
 // updateRBAC update or create the pgbouncer RBAC

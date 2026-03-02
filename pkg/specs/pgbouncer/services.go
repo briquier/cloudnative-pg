@@ -31,6 +31,51 @@ import (
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/utils/hash"
 )
 
+// HeadlessServiceSuffix is the suffix appended to the pooler name
+// to form the headless service used for peer discovery
+const HeadlessServiceSuffix = "-peers"
+
+// HeadlessServiceName returns the name of the headless service for a given pooler
+func HeadlessServiceName(pooler *apiv1.Pooler) string {
+	return pooler.Name + HeadlessServiceSuffix
+}
+
+// HeadlessService creates the headless service specification used by
+// PgBouncer pods to discover each other for cancel-request forwarding
+// via the [peers] configuration section
+func HeadlessService(pooler *apiv1.Pooler, cluster *apiv1.Cluster) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      HeadlessServiceName(pooler),
+			Namespace: pooler.Namespace,
+			Labels: map[string]string{
+				utils.PgbouncerNameLabel:              pooler.Name,
+				utils.ClusterLabelName:                cluster.Name,
+				utils.PodRoleLabelName:                string(utils.PodRolePooler),
+				utils.KubernetesAppLabelName:          utils.AppName,
+				utils.KubernetesAppInstanceLabelName:  cluster.Name,
+				utils.KubernetesAppComponentLabelName: utils.PoolerComponentName,
+				utils.KubernetesAppManagedByLabelName: utils.ManagerName,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector: map[string]string{
+				utils.PgbouncerNameLabel: pooler.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:       pgBouncerConfig.PgBouncerPortName,
+					Port:       pgBouncerConfig.PgBouncerPort,
+					TargetPort: intstr.FromString(pgBouncerConfig.PgBouncerPortName),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+			PublishNotReadyAddresses: true,
+		},
+	}
+}
+
 // Service create the specification for the service of
 // pgbouncer
 func Service(pooler *apiv1.Pooler, cluster *apiv1.Cluster) (*corev1.Service, error) {

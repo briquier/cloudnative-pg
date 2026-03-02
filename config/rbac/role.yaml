@@ -30,18 +30,19 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
+  - endpoints
   - nodes
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - ""
   resources:

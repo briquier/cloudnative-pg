@@ -374,6 +374,50 @@ replicas).
     pointing to the PostgreSQL primary in zone 1.
 :::
 
+## Cancel request forwarding (peer discovery)
+
+When running multiple PgBouncer instances behind a Kubernetes Service, query
+cancellation requests (e.g. when a client presses `Ctrl+C`) may not reach the
+correct PgBouncer instance. This happens because the cancel request is sent
+on a new TCP connection that the Service may route to a different pod than
+the one holding the original connection.
+
+Without peering, the receiving PgBouncer instance does not recognize the cancel
+key and silently drops the request. Under heavy load, this can lead to
+connection accumulation on the PostgreSQL server and, in the worst case, total
+connection exhaustion.
+
+### Automatic peering
+
+CloudNativePG automatically configures PgBouncer's
+[`[peers]` section](https://www.pgbouncer.org/config.html#section-peers)
+when multiple instances are deployed. The operator:
+
+1. Creates a **headless Service** (`<pooler-name>-peers`) alongside the main
+   Service, enabling direct pod-to-pod communication.
+2. Each PgBouncer pod **watches the Endpoints** of this headless Service to
+   discover the IP addresses of all other PgBouncer pods.
+3. Each pod generates a deterministic `peer_id` from its own IP address and
+   populates the `[peers]` section in `pgbouncer.ini` with the addresses of
+   all other pods.
+4. When a PgBouncer instance receives a cancel request it cannot handle, it
+   **forwards it to the correct peer** that owns the cancel key.
+
+This configuration is fully automatic and requires no user action. It is
+enabled whenever the pooler has more than one instance.
+
+:::info
+    The `peer_id` and `[peers]` section are managed by the operator and cannot
+    be set manually through `.spec.pgbouncer.parameters`. Attempting to set
+    `peer_id` as a parameter will be rejected by the validating webhook.
+:::
+
+:::note
+    When scaling a pooler up or down, PgBouncer pods automatically detect
+    the change in Endpoints and reload their configuration to update the
+    peer list. No manual intervention or pod restart is required.
+:::
+
 ## PgBouncer configuration options
 
 The operator manages most of the [configuration options for PgBouncer](https://www.pgbouncer.org/config.html),
@@ -735,6 +779,14 @@ service defined in the `Pooler` resource.
 The current implementation of the pooler is designed to work as part of a
 specific CloudNativePG cluster (a service). It isn't currently possible to
 create a pooler that spans multiple clusters.
+
+### Cancel request forwarding requires PgBouncer 1.21+
+
+The `[peers]` section used for cancel request forwarding between PgBouncer
+instances requires PgBouncer version **1.21 or higher**. If you are using an
+older version, the peering configuration will be present in the config file
+but ignored by PgBouncer, and cancel requests across instances will not be
+forwarded.
 
 ### Controlled configurability
 

@@ -56,7 +56,7 @@ var _ = Describe("Pooler ServiceAccount, Role, and RoleBinding", func() {
 			role := Role(pooler)
 			Expect(role.Name).To(Equal(pooler.Name))
 			Expect(role.Namespace).To(Equal(pooler.Namespace))
-			Expect(role.Rules).To(HaveLen(3))
+			Expect(role.Rules).To(HaveLen(4))
 			Expect(role.Rules[0].APIGroups).To(ContainElement("postgresql.cnpg.io"))
 			Expect(role.Rules[0].Resources).To(ContainElement("poolers"))
 			Expect(role.Rules[0].Verbs).To(ConsistOf("get", "watch"))
@@ -64,6 +64,14 @@ var _ = Describe("Pooler ServiceAccount, Role, and RoleBinding", func() {
 			Expect(role.Rules[2].APIGroups).To(ContainElement(""))
 			Expect(role.Rules[2].Resources).To(ContainElement("secrets"))
 			Expect(role.Rules[2].Verbs).To(ConsistOf("get", "watch"))
+		})
+
+		It("includes endpoints permission for peer discovery", func() {
+			role := Role(pooler)
+			endpointsRule := role.Rules[3]
+			Expect(endpointsRule.APIGroups).To(ContainElement(""))
+			Expect(endpointsRule.Resources).To(ContainElement("endpoints"))
+			Expect(endpointsRule.Verbs).To(ConsistOf("get", "list", "watch"))
 		})
 	})
 

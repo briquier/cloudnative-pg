@@ -24,10 +24,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cloudnative-pg/machinery/pkg/fileutils"
 	"github.com/cloudnative-pg/machinery/pkg/log"
+	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,6 +41,19 @@ import (
 	apiv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/management"
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/management/pgbouncer/config"
+	pgbouncerSpecs "github.com/cloudnative-pg/cloudnative-pg/pkg/specs/pgbouncer"
+)
+
+const (
+	// endpointsWatchRetryInterval is the interval between retries when the
+	// Endpoints watch fails (e.g. RBAC not ready at pod startup).
+	endpointsWatchRetryInterval = 5 * time.Second
+	// reloadBackoffDuration is the initial delay before retrying PgBouncer
+	// RELOAD when the admin socket is not ready yet (e.g. right after startup).
+	reloadBackoffDuration = 100 * time.Millisecond
+	// reloadBackoffSteps is the max number of retries for RELOAD when the
+	// socket is not ready.
+	reloadBackoffSteps = 8
 )
 
 // PgBouncerReconciler reconciles the status of the Pooler resource with
@@ -46,6 +61,7 @@ import (
 type PgBouncerReconciler struct {
 	client               ctrl.WithWatch
 	poolerWatch          watch.Interface
+	endpointsWatch       watch.Interface
 	instance             PgBouncerInstanceInterface
 	poolerNamespacedName types.NamespacedName
 }
@@ -86,11 +102,14 @@ func (r *PgBouncerReconciler) Run(ctx context.Context) {
 
 // watch contains the main reconciler loop
 func (r *PgBouncerReconciler) watch(ctx context.Context) error {
+	reconcilerWatchCtx, reconcilerWatchCancel := context.WithCancel(ctx)
+	defer reconcilerWatchCancel()
+
 	contextLogger := log.FromContext(ctx)
 
 	var err error
 
-	r.poolerWatch, err = r.client.Watch(ctx, &apiv1.PoolerList{}, &ctrl.ListOptions{
+	r.poolerWatch, err = r.client.Watch(reconcilerWatchCtx, &apiv1.PoolerList{}, &ctrl.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("metadata.name", r.poolerNamespacedName.Name),
 		Namespace:     r.poolerNamespacedName.Namespace,
 	})
@@ -99,22 +118,108 @@ func (r *PgBouncerReconciler) watch(ctx context.Context) error {
 	}
 	defer r.Stop()
 
-	for event := range r.poolerWatch.ResultChan() {
-		receivedEvent := event
-		err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			return r.Reconcile(ctx, &receivedEvent)
-		})
-		if err != nil {
-			contextLogger.Error(err, "Reconciliation error")
+	headlessServiceName := r.poolerNamespacedName.Name + pgbouncerSpecs.HeadlessServiceSuffix
+	r.endpointsWatch, err = r.client.Watch(reconcilerWatchCtx, &corev1.EndpointsList{}, &ctrl.ListOptions{
+		FieldSelector: fields.OneTermEqualSelector("metadata.name", headlessServiceName),
+		Namespace:     r.poolerNamespacedName.Namespace,
+	})
+
+	// If the endpoints watch fails (e.g. RBAC not yet applied), start a
+	// background goroutine that retries until it succeeds. This avoids
+	// permanently losing peer discovery when the operator hasn't propagated
+	// the Role yet at pod startup.
+	var endpointsWatchCh <-chan watch.Interface
+	if err != nil {
+		contextLogger.Info("Cannot watch endpoints for peer discovery yet, will retry in background",
+			"service", headlessServiceName, "error", err)
+		ch := make(chan watch.Interface) // unbuffered: send only succeeds when loop is receiving, avoids orphaned watch
+		endpointsWatchCh = ch
+		go r.retryEndpointsWatch(reconcilerWatchCtx, headlessServiceName, ch)
+	}
+
+	poolerCh := r.poolerWatch.ResultChan()
+	var endpointsCh <-chan watch.Event
+	if r.endpointsWatch != nil {
+		endpointsCh = r.endpointsWatch.ResultChan()
+	}
+
+	for {
+		select {
+		case event, ok := <-poolerCh:
+			if !ok {
+				return nil
+			}
+			receivedEvent := event
+			err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				return r.Reconcile(ctx, &receivedEvent)
+			})
+			if err != nil {
+				contextLogger.Error(err, "Reconciliation error")
+			}
+
+		case _, ok := <-endpointsCh:
+			if !ok {
+				endpointsCh = nil
+				continue
+			}
+			if err := r.synchronizeConfigFromEndpoints(ctx); err != nil {
+				contextLogger.Error(err, "Reconciliation error from endpoints change")
+			}
+
+		case w := <-endpointsWatchCh:
+			r.endpointsWatch = w
+			endpointsCh = w.ResultChan()
+			endpointsWatchCh = nil
+			contextLogger.Info("Endpoints watch established, peer discovery now active")
+			if err := r.synchronizeConfigFromEndpoints(ctx); err != nil {
+				contextLogger.Error(err, "Reconciliation error after endpoints watch established")
+			}
 		}
 	}
-	return nil
+}
+
+// retryEndpointsWatch periodically attempts to establish an Endpoints watch
+// until it succeeds or the context is canceled.
+func (r *PgBouncerReconciler) retryEndpointsWatch(
+	ctx context.Context,
+	headlessServiceName string,
+	result chan<- watch.Interface,
+) {
+	contextLogger := log.FromContext(ctx)
+	ticker := time.NewTicker(endpointsWatchRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w, err := r.client.Watch(ctx, &corev1.EndpointsList{}, &ctrl.ListOptions{
+				FieldSelector: fields.OneTermEqualSelector("metadata.name", headlessServiceName),
+				Namespace:     r.poolerNamespacedName.Namespace,
+			})
+			if err != nil {
+				contextLogger.Debug("Retrying endpoints watch", "error", err)
+				continue
+			}
+			select {
+			case result <- w:
+				return
+			case <-ctx.Done():
+				w.Stop()
+				return
+			}
+		}
+	}
 }
 
 // Stop stops the controller
 func (r *PgBouncerReconciler) Stop() {
 	if r.poolerWatch != nil {
 		r.poolerWatch.Stop()
+	}
+	if r.endpointsWatch != nil {
+		r.endpointsWatch.Stop()
 	}
 }
 
@@ -178,11 +283,40 @@ func (r *PgBouncerReconciler) synchronizeConfig(ctx context.Context, pooler *api
 		return nil
 	}
 
-	if err = r.instance.Reload(); err != nil {
+	// PgBouncer may not have created its Unix socket yet (e.g. right after startup
+	// or when an Endpoints event fires before PgBouncer is ready). Retry briefly.
+	reloadBackoff := retry.DefaultRetry
+	reloadBackoff.Duration = reloadBackoffDuration
+	reloadBackoff.Steps = reloadBackoffSteps
+	if err = retry.OnError(reloadBackoff, isSocketNotReady, func() error {
+		return r.instance.Reload()
+	}); err != nil {
 		return fmt.Errorf("while reloading configuration due to change: %w", err)
 	}
 
 	return nil
+}
+
+// isSocketNotReady returns true when the error indicates PgBouncer's admin socket
+// is not available yet (process still starting), so the caller can retry.
+func isSocketNotReady(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "no such file or directory") ||
+		strings.Contains(s, "connection refused")
+}
+
+// synchronizeConfigFromEndpoints re-reads the Pooler resource and
+// synchronizes the PgBouncer configuration when endpoints change.
+// This ensures the [peers] section is updated when pods are added or removed.
+func (r *PgBouncerReconciler) synchronizeConfigFromEndpoints(ctx context.Context) error {
+	var pooler apiv1.Pooler
+	if err := r.GetClient().Get(ctx, r.poolerNamespacedName, &pooler); err != nil {
+		return fmt.Errorf("while getting pooler for endpoints reconciliation: %w", err)
+	}
+	return r.synchronizeConfig(ctx, &pooler)
 }
 
 // writePgBouncerConfig writes the PgBouncer configuration files given the Pooler
@@ -208,7 +342,7 @@ func (r *PgBouncerReconciler) writePgBouncerConfig(ctx context.Context, pooler *
 		return false, fmt.Errorf("while reading secrets: %w", err)
 	}
 
-	if configFiles, err = config.BuildConfigurationFiles(pooler, secrets); err != nil {
+	if configFiles, err = config.BuildConfigurationFiles(pooler, secrets, r.getPeeringInfo(ctx)); err != nil {
 		return false, fmt.Errorf("while generating pgbouncer configuration: %w", err)
 	}
 

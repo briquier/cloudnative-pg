@@ -82,7 +82,7 @@ func NewControllerRuntimeClient() (client.WithWatch, error) {
 		// custom resources
 		&apiv1.Cluster{}, &apiv1.Backup{}, &apiv1.Pooler{}, &apiv1.ImageCatalog{}, &apiv1.ClusterImageCatalog{},
 		// k8s resources needed for the typedClient to work properly
-		&corev1.ConfigMap{}, &corev1.Secret{},
+		&corev1.ConfigMap{}, &corev1.Secret{}, &corev1.Endpoints{},
 	}
 
 	// we register the resources

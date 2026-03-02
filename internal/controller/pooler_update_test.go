@@ -361,6 +361,54 @@ var _ = Describe("unit test of pooler_update reconciliation logic", func() {
 				NotTo(Equal(afterDep.Annotations[utils.PoolerSpecHashAnnotationName]))
 		})
 	})
+
+	It("should reconcileHeadlessService works correctly", func() {
+		ctx := context.Background()
+		namespace := newFakeNamespace(env.client)
+		cluster := newFakeCNPGCluster(env.client, namespace)
+		pooler := newFakePooler(env.client, cluster)
+		res := &poolerManagedResources{Cluster: cluster}
+
+		By("making sure the headless service doesn't exist", func() {
+			svc := &corev1.Service{}
+			expectedSVC := pgbouncer.HeadlessService(pooler, cluster)
+			err := env.client.Get(ctx, types.NamespacedName{
+				Name: expectedSVC.Name, Namespace: expectedSVC.Namespace,
+			}, svc)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		By("making sure it creates the headless service", func() {
+			err := env.poolerReconciler.reconcileHeadlessService(ctx, pooler, res)
+			Expect(err).ToNot(HaveOccurred())
+
+			svc := &corev1.Service{}
+			expectedSVC := pgbouncer.HeadlessService(pooler, cluster)
+			err = env.client.Get(ctx, types.NamespacedName{
+				Name: expectedSVC.Name, Namespace: expectedSVC.Namespace,
+			}, svc)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(svc.Spec.Selector).To(Equal(expectedSVC.Spec.Selector))
+			Expect(svc.Spec.Ports).To(Equal(expectedSVC.Spec.Ports))
+			res.HeadlessService = svc
+		})
+
+		By("making sure the headless svc doesn't get updated if there are no changes", func() {
+			previousService := res.HeadlessService.DeepCopy()
+			err := env.poolerReconciler.reconcileHeadlessService(ctx, pooler, res)
+			Expect(err).ToNot(HaveOccurred())
+
+			svc := &corev1.Service{}
+			expectedSVC := pgbouncer.HeadlessService(pooler, cluster)
+			err = env.client.Get(ctx, types.NamespacedName{
+				Name: expectedSVC.Name, Namespace: expectedSVC.Namespace,
+			}, svc)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(previousService.Spec).To(BeEquivalentTo(svc.Spec))
+		})
+	})
 })
 
 var _ = Describe("ensureServiceAccountPullSecret", func() {

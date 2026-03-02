@@ -98,4 +98,44 @@ var _ = Describe("Pooler Service", func() {
 			}))
 		})
 	})
+
+	Context("when creating a HeadlessService", func() {
+		It("returns a headless service with clusterIP None", func() {
+			service := HeadlessService(pooler, cluster)
+
+			Expect(service).ToNot(BeNil())
+			Expect(service.Name).To(Equal(pooler.Name + HeadlessServiceSuffix))
+			Expect(service.Namespace).To(Equal(pooler.Namespace))
+			Expect(service.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(service.Spec.PublishNotReadyAddresses).To(BeTrue())
+		})
+
+		It("has the correct selector and port", func() {
+			service := HeadlessService(pooler, cluster)
+
+			Expect(service.Spec.Selector).To(Equal(map[string]string{
+				utils.PgbouncerNameLabel: pooler.Name,
+			}))
+			Expect(service.Spec.Ports).To(ConsistOf(corev1.ServicePort{
+				Name:       "pgbouncer",
+				Port:       pgBouncerConfig.PgBouncerPort,
+				TargetPort: intstr.FromString("pgbouncer"),
+				Protocol:   corev1.ProtocolTCP,
+			}))
+		})
+
+		It("has the expected labels", func() {
+			service := HeadlessService(pooler, cluster)
+
+			Expect(service.Labels).To(BeEquivalentTo(map[string]string{
+				utils.ClusterLabelName:                cluster.Name,
+				utils.PgbouncerNameLabel:              pooler.Name,
+				utils.PodRoleLabelName:                string(utils.PodRolePooler),
+				utils.KubernetesAppLabelName:          utils.AppName,
+				utils.KubernetesAppInstanceLabelName:  cluster.Name,
+				utils.KubernetesAppComponentLabelName: utils.PoolerComponentName,
+				utils.KubernetesAppManagedByLabelName: utils.ManagerName,
+			}))
+		})
+	})
 })
