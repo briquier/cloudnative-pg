@@ -49,6 +49,7 @@ func Service(pooler *apiv1.Pooler, cluster *apiv1.Cluster) (*corev1.Service, err
 		WithLabel(utils.KubernetesAppManagedByLabelName, utils.ManagerName).
 		WithAnnotation(utils.PoolerSpecHashAnnotationName, poolerHash).
 		WithServiceType(corev1.ServiceTypeClusterIP, false).
+		WithSessionAffinity(corev1.ServiceAffinityClientIP, false).
 		WithServicePortNoOverwrite(&corev1.ServicePort{
 			Name:       pgBouncerConfig.PgBouncerPortName,
 			Port:       pgBouncerConfig.PgBouncerPort,

@@ -78,6 +78,15 @@ func (builder *Builder) WithServiceType(serviceType corev1.ServiceType, overwrit
 	return builder
 }
 
+// WithSessionAffinity sets the session affinity on the service.
+// When overwrite is false, it only sets the value if the current session affinity is empty.
+func (builder *Builder) WithSessionAffinity(affinity corev1.ServiceAffinity, overwrite bool) *Builder {
+	if overwrite || builder.status.Spec.SessionAffinity == "" {
+		builder.status.Spec.SessionAffinity = affinity
+	}
+	return builder
+}
+
 // WithServicePort adds a port to the current service
 func (builder *Builder) WithServicePort(value *corev1.ServicePort) *Builder {
 	for idx, port := range builder.status.Spec.Ports {

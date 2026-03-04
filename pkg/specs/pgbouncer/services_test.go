@@ -96,6 +96,25 @@ var _ = Describe("Pooler Service", func() {
 			Expect(service.Spec.Selector).To(Equal(map[string]string{
 				utils.PgbouncerNameLabel: pooler.Name,
 			}))
+			Expect(service.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityClientIP))
+		})
+
+		It("defaults sessionAffinity to ClientIP when not specified", func() {
+			pooler.Spec.ServiceTemplate = nil
+			service, err := Service(pooler, cluster)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(service.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityClientIP))
+		})
+
+		It("respects explicit sessionAffinity None from serviceTemplate", func() {
+			pooler.Spec.ServiceTemplate = &apiv1.ServiceTemplateSpec{
+				Spec: corev1.ServiceSpec{
+					SessionAffinity: corev1.ServiceAffinityNone,
+				},
+			}
+			service, err := Service(pooler, cluster)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(service.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityNone))
 		})
 	})
 })

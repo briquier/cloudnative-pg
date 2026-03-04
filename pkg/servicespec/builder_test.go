@@ -82,6 +82,31 @@ var _ = Describe("Service template builder", func() {
 		Expect(service.Spec.Ports[0].Port).To(Equal(int32(9999)))
 	})
 
+	It("sets session affinity when empty", func() {
+		Expect(New().WithSessionAffinity(corev1.ServiceAffinityClientIP, false).Build().Spec.SessionAffinity).
+			To(Equal(corev1.ServiceAffinityClientIP))
+	})
+
+	It("does not override session affinity when overwrite is false", func() {
+		svc := NewFrom(&apiv1.ServiceTemplateSpec{
+			Spec: corev1.ServiceSpec{
+				SessionAffinity: corev1.ServiceAffinityNone,
+			},
+		}).WithSessionAffinity(corev1.ServiceAffinityClientIP, false).Build()
+
+		Expect(svc.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityNone))
+	})
+
+	It("overrides session affinity when overwrite is true", func() {
+		svc := NewFrom(&apiv1.ServiceTemplateSpec{
+			Spec: corev1.ServiceSpec{
+				SessionAffinity: corev1.ServiceAffinityNone,
+			},
+		}).WithSessionAffinity(corev1.ServiceAffinityClientIP, true).Build()
+
+		Expect(svc.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityClientIP))
+	})
+
 	It("overrides selector", func() {
 		Expect(NewFrom(&apiv1.ServiceTemplateSpec{
 			Spec: corev1.ServiceSpec{
