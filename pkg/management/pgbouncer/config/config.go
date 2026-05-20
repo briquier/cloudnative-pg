@@ -185,7 +185,9 @@ func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (Configurat
 	if isCertAuth {
 		parameters["server_tls_cert_file"] = authUserCrtPath
 		parameters["server_tls_key_file"] = authUserKeyPath
-	} else if !isLDAPEnabled(pooler) {
+	} else if !isLDAPEnabled(pooler) || isHBAModeWithLDAP(pooler) {
+		// auth_file is needed for password-based users. In HBA mode with LDAP,
+		// only some users use LDAP; the others need userlist.txt for lookup.
 		parameters["auth_file"] = authFilePath
 	}
 
@@ -218,8 +220,9 @@ func BuildConfigurationFiles(pooler *apiv1.Pooler, secrets *Secrets) (Configurat
 	}
 	files[filepath.Join(ConfigsDir, PgBouncerIniFileName)] = pgbouncerIni.Bytes()
 
-	// userlist.txt is only used for client auth when not using LDAP
-	if !isCertAuth && !isLDAPEnabled(pooler) {
+	// userlist.txt is used for password-based auth. In HBA mode with LDAP,
+	// it is still needed for non-LDAP users defined in pg_hba rules.
+	if !isCertAuth && (!isLDAPEnabled(pooler) || isHBAModeWithLDAP(pooler)) {
 		err = pgBouncerUserListTemplate.Execute(&pgbouncerUserList, templateData)
 		if err != nil {
 			return nil, fmt.Errorf("while executing %s template: %w", PgBouncerUserListFileName, err)

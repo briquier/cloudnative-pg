@@ -37,3 +37,6 @@ bundle.Dockerfile
 catalog
 catalog.Dockerfile
 cloudnative-pg-catalog.yaml
+
+# IDE — Cursor
+.cursor/

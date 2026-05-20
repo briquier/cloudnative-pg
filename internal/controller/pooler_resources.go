@@ -38,6 +38,9 @@ type poolerManagedResources struct {
 	// the auth_query connection
 	AuthUserSecret *corev1.Secret
 
+	// This is the secret containing the LDAP bind password (when LDAP is enabled)
+	LDAPBindSecret *corev1.Secret
+
 	// This is the pgbouncer deployment
 	Deployment *appsv1.Deployment
 
@@ -66,6 +69,16 @@ func (r *PoolerReconciler) getManagedResources(ctx context.Context,
 		ctx, r.Client, client.ObjectKey{Name: pooler.GetAuthQuerySecretName(), Namespace: pooler.Namespace})
 	if err != nil {
 		return nil, err
+	}
+
+	// Get the LDAP bind secret if LDAP is enabled
+	if pooler.Spec.LDAP != nil && pooler.Spec.LDAP.Credentials != nil &&
+		pooler.Spec.LDAP.Credentials.SecretName != "" {
+		result.LDAPBindSecret, err = getSecretOrNil(
+			ctx, r.Client, client.ObjectKey{Name: pooler.Spec.LDAP.Credentials.SecretName, Namespace: pooler.Namespace})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Get the pooler deployment

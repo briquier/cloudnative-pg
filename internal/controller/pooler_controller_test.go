@@ -268,4 +268,55 @@ var _ = Describe("isOwnedByPooler function tests", func() {
 		result := isOwnedByPooler(pooler.Name, &ownedResource)
 		Expect(result).To(BeFalse())
 	})
+
+	It("getPoolersUsingSecret matches a Pooler by its LDAP bind secret name", func() {
+		namespace := newFakeNamespace(env.client)
+		cluster := newFakeCNPGCluster(env.client, namespace)
+
+		ldapPooler := *newFakePooler(env.client, cluster)
+		ldapPooler.Spec.LDAP = &apiv1.PoolerLDAPConfig{
+			Enabled: true,
+			Credentials: &apiv1.PoolerLDAPCredentials{
+				SecretName: "my-ldap-bind-secret",
+			},
+		}
+
+		otherPooler := *newFakePooler(env.client, cluster)
+
+		poolerList := apiv1.PoolerList{Items: []apiv1.Pooler{ldapPooler, otherPooler}}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-ldap-bind-secret",
+				Namespace: namespace,
+			},
+		}
+
+		reqs := getPoolersUsingSecret(poolerList, secret)
+		Expect(reqs).To(HaveLen(1))
+		Expect(reqs[0]).To(Equal(types.NamespacedName{Name: ldapPooler.Name, Namespace: ldapPooler.Namespace}))
+	})
+
+	It("getPoolersUsingSecret does not match a Pooler with LDAP disabled", func() {
+		namespace := newFakeNamespace(env.client)
+		cluster := newFakeCNPGCluster(env.client, namespace)
+
+		ldapPooler := *newFakePooler(env.client, cluster)
+		ldapPooler.Spec.LDAP = &apiv1.PoolerLDAPConfig{
+			Enabled: false,
+			Credentials: &apiv1.PoolerLDAPCredentials{
+				SecretName: "my-ldap-bind-secret",
+			},
+		}
+
+		poolerList := apiv1.PoolerList{Items: []apiv1.Pooler{ldapPooler}}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-ldap-bind-secret",
+				Namespace: namespace,
+			},
+		}
+
+		reqs := getPoolersUsingSecret(poolerList, secret)
+		Expect(reqs).To(BeEmpty())
+	})
 })

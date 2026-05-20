@@ -228,4 +228,67 @@ var _ = Describe("Deployment", func() {
 		Expect(found.Resources.Limits.Cpu().String()).To(Equal("1"))
 		Expect(found.Resources.Limits.Memory().String()).To(Equal("100Mi"))
 	})
+
+	It("mounts the LDAP bind secret only in the pgbouncer container when LDAP is enabled", func() {
+		pooler.Spec.LDAP = &apiv1.PoolerLDAPConfig{
+			Enabled: true,
+			Host:    "ldap.example.com",
+			Credentials: &apiv1.PoolerLDAPCredentials{
+				SecretName: "my-ldap-bind-secret",
+			},
+		}
+
+		deployment, err := Deployment(pooler, cluster)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		// Volume must be present
+		var ldapVol *corev1.Volume
+		for i := range deployment.Spec.Template.Spec.Volumes {
+			if deployment.Spec.Template.Spec.Volumes[i].Name == ldapBindSecretVolumeName {
+				ldapVol = &deployment.Spec.Template.Spec.Volumes[i]
+				break
+			}
+		}
+		Expect(ldapVol).NotTo(BeNil(), "ldap-bind-secret volume should be present")
+		Expect(ldapVol.Secret.SecretName).To(Equal("my-ldap-bind-secret"))
+		Expect(*ldapVol.Secret.DefaultMode).To(Equal(int32(0o400)))
+
+		// Mount must be present in the pgbouncer container
+		var pgbouncerContainer *corev1.Container
+		for i := range deployment.Spec.Template.Spec.Containers {
+			if deployment.Spec.Template.Spec.Containers[i].Name == "pgbouncer" {
+				pgbouncerContainer = &deployment.Spec.Template.Spec.Containers[i]
+				break
+			}
+		}
+		Expect(pgbouncerContainer).NotTo(BeNil())
+		var foundMount bool
+		for _, m := range pgbouncerContainer.VolumeMounts {
+			if m.Name == ldapBindSecretVolumeName {
+				foundMount = true
+				Expect(m.MountPath).To(Equal(pgBouncerConfig.LDAPBindPasswordMountDir))
+				Expect(m.ReadOnly).To(BeTrue())
+				break
+			}
+		}
+		Expect(foundMount).To(BeTrue(), "pgbouncer container should have the LDAP volume mount")
+
+		// Mount must NOT be present in any init container
+		for _, ic := range deployment.Spec.Template.Spec.InitContainers {
+			for _, m := range ic.VolumeMounts {
+				Expect(m.Name).NotTo(Equal(ldapBindSecretVolumeName),
+					"init container %q must not mount the LDAP bind secret", ic.Name)
+			}
+		}
+	})
+
+	It("does not add LDAP volume when LDAP is disabled", func() {
+		pooler.Spec.LDAP = nil
+		deployment, err := Deployment(pooler, cluster)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		for _, v := range deployment.Spec.Template.Spec.Volumes {
+			Expect(v.Name).NotTo(Equal(ldapBindSecretVolumeName))
+		}
+	})
 })

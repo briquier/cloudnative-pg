@@ -352,3 +352,93 @@ var _ = Describe("Pooler LDAP defaulting", func() {
 		Expect(pooler.Spec.LDAP.SearchFilter).To(BeEmpty())
 	})
 })
+
+var _ = Describe("Pooler HBA mode with mixed authentication", func() {
+	v := &PoolerCustomValidator{}
+
+	ldapConfig := func() *apiv1.PoolerLDAPConfig {
+		return &apiv1.PoolerLDAPConfig{
+			Enabled:     true,
+			Host:        "ldap.example.com",
+			BaseDN:      "dc=example,dc=com",
+			BindDN:      "cn=admin,dc=example,dc=com",
+			Credentials: &apiv1.PoolerLDAPCredentials{SecretName: "ldap-secret"},
+		}
+	}
+
+	It("allows LDAP + authQuery when pg_hba rules are defined (HBA mode)", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					AuthQuery: "SELECT usename, passwd FROM pg_shadow WHERE usename=$1",
+					AuthQuerySecret: &apiv1.LocalObjectReference{
+						Name: "auth-secret",
+					},
+					PgHBA: []string{
+						"host tutu ldap-user 0.0.0.0/0 ldap",
+						"host all basic-user 0.0.0.0/0 scram-sha-256",
+					},
+				},
+				LDAP: ldapConfig(),
+			},
+		}
+		Expect(v.validateLDAP(pooler)).To(BeEmpty(),
+			"LDAP + authQuery should be allowed when pg_hba rules are defined")
+	})
+
+	It("rejects LDAP + authQuery when pg_hba is empty (pure LDAP mode)", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					AuthQuery: "SELECT usename, passwd FROM pg_shadow WHERE usename=$1",
+				},
+				LDAP: ldapConfig(),
+			},
+		}
+		errs := v.validateLDAP(pooler)
+		Expect(errs).NotTo(BeEmpty(), "LDAP + authQuery should be rejected in pure LDAP mode")
+	})
+
+	It("rejects pg_hba rule with ldap method when spec.ldap is not configured", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					PgHBA: []string{"host all ldap-user 0.0.0.0/0 ldap"},
+				},
+			},
+		}
+		errs := v.validatePgBouncerHBA(pooler)
+		Expect(errs).NotTo(BeEmpty(), "pg_hba ldap rule without spec.ldap should be rejected")
+	})
+
+	It("accepts pg_hba rule with ldap method when spec.ldap is configured", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					PgHBA: []string{"host all ldap-user 0.0.0.0/0 ldap"},
+				},
+				LDAP: ldapConfig(),
+			},
+		}
+		Expect(v.validatePgBouncerHBA(pooler)).To(BeEmpty())
+	})
+
+	It("accepts pg_hba rules without ldap method regardless of spec.ldap", func() {
+		pooler := &apiv1.Pooler{
+			Spec: apiv1.PoolerSpec{
+				Cluster: apiv1.LocalObjectReference{Name: "cluster"},
+				PgBouncer: &apiv1.PgBouncerSpec{
+					PgHBA: []string{
+						"host all basic-user 0.0.0.0/0 scram-sha-256",
+						"host all user-b 0.0.0.0/0 md5",
+					},
+				},
+			},
+		}
+		Expect(v.validatePgBouncerHBA(pooler)).To(BeEmpty())
+	})
+})

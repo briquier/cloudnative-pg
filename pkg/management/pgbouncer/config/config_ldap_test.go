@@ -183,8 +183,29 @@ var _ = Describe("LDAP URL and options building", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(url).To(ContainSubstring("ldap://ldap.example.com:389/"))
 		Expect(url).To(ContainSubstring("sub"))
-		// Filter (uid=%u) is URL-encoded
-		Expect(url).To(ContainSubstring("%28uid%3D%25u%29"))
+		// Filter is passed through unencoded so PgBouncer can interpolate %u
+		Expect(url).To(ContainSubstring("(uid=%u)"))
+		Expect(url).NotTo(ContainSubstring("%25u"), "% must not be double-encoded: PgBouncer needs %u verbatim")
+	})
+
+	It("buildLDAPURL does not percent-encode commas and equals in baseDN", func() {
+		pooler := poolerWithLDAP()
+		pooler.Spec.LDAP.BaseDN = "dc=example,dc=com"
+		url, err := buildLDAPURL(pooler)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(url).To(ContainSubstring("dc=example,dc=com"),
+			"commas and equals in the DN must not be percent-encoded")
+		Expect(url).NotTo(ContainSubstring("%2C"), "comma must not be encoded to %2C")
+		Expect(url).NotTo(ContainSubstring("%3D"), "equals must not be encoded to %3D")
+	})
+
+	It("buildLDAPURL does not percent-encode %u in custom searchFilter", func() {
+		pooler := poolerWithLDAP()
+		pooler.Spec.LDAP.SearchFilter = "(sAMAccountName=%u)"
+		url, err := buildLDAPURL(pooler)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(url).To(ContainSubstring("(sAMAccountName=%u)"))
+		Expect(url).NotTo(ContainSubstring("%25u"))
 	})
 
 	It("buildLDAPURL uses ldaps and custom port when TLS enabled", func() {
@@ -218,10 +239,110 @@ var _ = Describe("LDAP URL and options building", func() {
 	})
 })
 
+var _ = Describe("LDAP SkipVerify option", func() {
+	It("buildAuthLDAPOptions includes ldaptls_noverify=1 when SkipVerify is true", func() {
+		pooler := poolerWithLDAP()
+		pooler.Spec.LDAP.TLS = &apiv1.PoolerLDAPTLSConfig{Enabled: true, SkipVerify: true}
+		opts, err := buildAuthLDAPOptions(pooler)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts).To(ContainSubstring("ldaptls_noverify=1"))
+	})
+
+	It("buildAuthLDAPOptions does not include ldaptls_noverify when SkipVerify is false", func() {
+		pooler := poolerWithLDAP()
+		pooler.Spec.LDAP.TLS = &apiv1.PoolerLDAPTLSConfig{Enabled: true, SkipVerify: false}
+		opts, err := buildAuthLDAPOptions(pooler)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts).NotTo(ContainSubstring("ldaptls_noverify"))
+	})
+
+	It("buildAuthLDAPOptions does not include ldaptls_noverify when TLS is nil", func() {
+		pooler := poolerWithLDAP()
+		pooler.Spec.LDAP.TLS = nil
+		opts, err := buildAuthLDAPOptions(pooler)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts).NotTo(ContainSubstring("ldaptls_noverify"))
+	})
+})
+
 var _ = Describe("GetLDAPBindPasswordFilePath", func() {
 	It("returns path under LDAPBindPasswordMountDir", func() {
 		p := GetLDAPBindPasswordFilePath()
 		Expect(p).To(Equal(LDAPBindPasswordMountDir + "/" + LDAPBindPasswordFileName))
 		Expect(strings.HasPrefix(p, LDAPBindPasswordMountDir)).To(BeTrue())
+	})
+})
+
+// poolerWithHBAAndLDAP returns a Pooler with both pg_hba rules and LDAP configured.
+func poolerWithHBAAndLDAP() *apiv1.Pooler {
+	p := poolerWithLDAP()
+	p.Spec.PgBouncer.PgHBA = []string{
+		"host tutu ldap-user 0.0.0.0/0 ldap",
+		"host all basic-user 0.0.0.0/0 scram-sha-256",
+	}
+	return p
+}
+
+var _ = Describe("HBA mode with LDAP (mixed authentication)", func() {
+	It("isHBAModeWithLDAP returns true when pg_hba rules and LDAP are both set", func() {
+		Expect(isHBAModeWithLDAP(poolerWithHBAAndLDAP())).To(BeTrue())
+	})
+
+	It("isHBAModeWithLDAP returns false when pg_hba is empty", func() {
+		Expect(isHBAModeWithLDAP(poolerWithLDAP())).To(BeFalse())
+	})
+
+	It("isHBAModeWithLDAP returns false when LDAP is not enabled", func() {
+		p := poolerWithHBAAndLDAP()
+		p.Spec.LDAP.Enabled = false
+		Expect(isHBAModeWithLDAP(p)).To(BeFalse())
+	})
+
+	It("in HBA mode, applyLDAPParameters preserves auth_type=hba and injects auth_ldap_options", func() {
+		pooler := poolerWithHBAAndLDAP()
+		params := buildPgBouncerParameters(nil)
+		err := applyLDAPParameters(pooler, params)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(params["auth_type"]).To(Equal("hba"), "auth_type must remain hba in HBA mode")
+		Expect(params["auth_ldap_options"]).NotTo(BeEmpty())
+		Expect(params["auth_ldap_options"]).To(ContainSubstring("ldapurl="))
+	})
+
+	It("in pure LDAP mode (no pg_hba), applyLDAPParameters sets auth_type=ldap", func() {
+		pooler := poolerWithLDAP()
+		params := buildPgBouncerParameters(nil)
+		err := applyLDAPParameters(pooler, params)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(params["auth_type"]).To(Equal("ldap"))
+	})
+
+	It("in HBA mode, BuildConfigurationFiles generates userlist.txt and sets auth_file", func() {
+		pooler := poolerWithHBAAndLDAP()
+		secrets := minimalSecrets()
+		files, err := BuildConfigurationFiles(pooler, secrets)
+		Expect(err).NotTo(HaveOccurred())
+
+		userlistPath := filepath.Join(ConfigsDir, PgBouncerUserListFileName)
+		Expect(files).To(HaveKey(userlistPath), "userlist.txt must be generated for scram-sha-256 users")
+
+		iniPath := filepath.Join(ConfigsDir, PgBouncerIniFileName)
+		iniStr := string(files[iniPath])
+		Expect(iniStr).To(ContainSubstring("auth_file"))
+		Expect(iniStr).To(ContainSubstring("auth_type = hba"))
+		Expect(iniStr).NotTo(ContainSubstring("auth_type = ldap"))
+		Expect(iniStr).To(ContainSubstring("auth_ldap_options"))
+	})
+
+	It("in pure LDAP mode, BuildConfigurationFiles does NOT generate userlist.txt", func() {
+		pooler := poolerWithLDAP()
+		secrets := minimalSecrets()
+		files, err := BuildConfigurationFiles(pooler, secrets)
+		Expect(err).NotTo(HaveOccurred())
+
+		userlistPath := filepath.Join(ConfigsDir, PgBouncerUserListFileName)
+		Expect(files).NotTo(HaveKey(userlistPath), "userlist.txt must not be generated in pure LDAP mode")
+
+		iniPath := filepath.Join(ConfigsDir, PgBouncerIniFileName)
+		Expect(string(files[iniPath])).To(ContainSubstring("auth_type = ldap"))
 	})
 })

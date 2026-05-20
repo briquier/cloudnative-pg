@@ -212,11 +212,6 @@ func addLDAPVolumeIfEnabled(builder *podspec.Builder, pooler *apiv1.Pooler) *pod
 				},
 			},
 		}).
-		WithInitContainerVolumeMount(specs.BootstrapControllerContainerName, &corev1.VolumeMount{
-			Name:      ldapBindSecretVolumeName,
-			MountPath: pgBouncerConfig.LDAPBindPasswordMountDir,
-			ReadOnly:  true,
-		}, true).
 		WithContainerVolumeMount("pgbouncer", &corev1.VolumeMount{
 			Name:      ldapBindSecretVolumeName,
 			MountPath: pgBouncerConfig.LDAPBindPasswordMountDir,

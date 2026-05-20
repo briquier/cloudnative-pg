@@ -265,6 +265,18 @@ func getPoolersUsingSecret(poolers apiv1.PoolerList, secret *corev1.Secret) (req
 			)
 			continue
 		}
+
+		if pooler.Spec.LDAP != nil && pooler.Spec.LDAP.Enabled &&
+			pooler.Spec.LDAP.Credentials != nil &&
+			pooler.Spec.LDAP.Credentials.SecretName == secret.Name {
+			requests = append(requests,
+				types.NamespacedName{
+					Name:      pooler.Name,
+					Namespace: pooler.Namespace,
+				},
+			)
+			continue
+		}
 	}
 	return requests
 }

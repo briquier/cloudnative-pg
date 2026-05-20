@@ -22,6 +22,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	apiv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 )
@@ -39,8 +40,34 @@ func isLDAPEnabled(pooler *apiv1.Pooler) bool {
 	return pooler != nil && pooler.Spec.LDAP != nil && pooler.Spec.LDAP.Enabled
 }
 
+// isHBAModeWithLDAP returns true when pg_hba rules are defined AND LDAP is enabled.
+// In this mode auth_type=hba is preserved so PgBouncer routes each connection
+// through the HBA file, while auth_ldap_options is still injected for the rules
+// that use the ldap method. userlist.txt is also generated for non-LDAP users.
+func isHBAModeWithLDAP(pooler *apiv1.Pooler) bool {
+	return isLDAPEnabled(pooler) &&
+		pooler.Spec.PgBouncer != nil &&
+		len(pooler.Spec.PgBouncer.PgHBA) > 0
+}
+
+// encodeLDAPDN percent-encodes a Distinguished Name for use in an LDAP URL path
+// (RFC 4516). Characters that are structurally significant in LDAP DNs — comma,
+// equals-sign, plus, semicolon — are NOT percent-encoded so PgBouncer can parse
+// the DN correctly. url.PathEscape over-encodes these characters.
+func encodeLDAPDN(dn string) string {
+	encoded := url.PathEscape(dn)
+	encoded = strings.ReplaceAll(encoded, "%2C", ",")
+	encoded = strings.ReplaceAll(encoded, "%3D", "=")
+	encoded = strings.ReplaceAll(encoded, "%2B", "+")
+	encoded = strings.ReplaceAll(encoded, "%3B", ";")
+	return encoded
+}
+
 // buildLDAPURL builds the ldapurl value for auth_ldap_options (RFC 4516).
-// Format: ldap://host:port/baseDN??scope?filter (filter is URL-encoded).
+// Format: ldap://host:port/baseDN??sub?filter
+// The filter is passed through without percent-encoding because PgBouncer
+// performs variable substitution on %u at auth time — encoding % to %25 would
+// break username interpolation.
 // No sensitive data is included; bind password is supplied via file by the controller.
 func buildLDAPURL(pooler *apiv1.Pooler) (string, error) {
 	ldap := pooler.Spec.LDAP
@@ -59,10 +86,7 @@ func buildLDAPURL(pooler *apiv1.Pooler) (string, error) {
 	if filter == "" {
 		filter = apiv1.DefaultLDAPSearchFilter
 	}
-	// LDAP URL: baseDN and filter must be percent-encoded (RFC 4516).
-	encodedDN := url.PathEscape(ldap.BaseDN)
-	encodedFilter := url.PathEscape(filter)
-	ldapURL := fmt.Sprintf("%s://%s:%d/%s??sub?%s", scheme, ldap.Host, port, encodedDN, encodedFilter)
+	ldapURL := fmt.Sprintf("%s://%s:%d/%s??sub?%s", scheme, ldap.Host, port, encodeLDAPDN(ldap.BaseDN), filter)
 	return ldapURL, nil
 }
 
@@ -90,10 +114,16 @@ func buildAuthLDAPOptions(pooler *apiv1.Pooler) (string, error) {
 		opts += fmt.Sprintf(" ldapbinddn=\"%s\"", pooler.Spec.LDAP.BindDN)
 	}
 	opts += fmt.Sprintf(" ldapbindpasswdfile=\"%s\"", GetLDAPBindPasswordFilePath())
+	if pooler.Spec.LDAP.TLS != nil && pooler.Spec.LDAP.TLS.SkipVerify {
+		opts += " ldaptls_noverify=1"
+	}
 	return opts, nil
 }
 
-// applyLDAPParameters sets auth_type and auth_ldap_options when LDAP is enabled.
+// applyLDAPParameters injects LDAP-related parameters when LDAP is enabled.
+// In pure LDAP mode (no pg_hba rules), auth_type is set to "ldap" globally.
+// In HBA mode (pg_hba rules present), auth_type=hba is preserved and only
+// auth_ldap_options is injected — the HBA file routes per-user/per-database.
 // When LDAP is disabled, parameters are left unchanged (no regression).
 func applyLDAPParameters(pooler *apiv1.Pooler, parameters map[string]string) error {
 	if !isLDAPEnabled(pooler) {
@@ -103,7 +133,9 @@ func applyLDAPParameters(pooler *apiv1.Pooler, parameters map[string]string) err
 	if err != nil {
 		return err
 	}
-	parameters["auth_type"] = "ldap"
+	if !isHBAModeWithLDAP(pooler) {
+		parameters["auth_type"] = "ldap"
+	}
 	parameters["auth_ldap_options"] = opts
 	return nil
 }

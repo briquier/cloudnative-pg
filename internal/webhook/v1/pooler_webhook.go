@@ -22,6 +22,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cloudnative-pg/machinery/pkg/log"
 	"github.com/cloudnative-pg/machinery/pkg/stringset"
@@ -282,7 +283,31 @@ func (v *PoolerCustomValidator) validate(r *apiv1.Pooler) (allErrs field.ErrorLi
 	allErrs = append(allErrs, v.validatePgBouncer(r)...)
 	allErrs = append(allErrs, v.validateCluster(r)...)
 	allErrs = append(allErrs, v.validateLDAP(r)...)
+	allErrs = append(allErrs, v.validatePgBouncerHBA(r)...)
 	return allErrs
+}
+
+// validatePgBouncerHBA checks that pg_hba rules referencing the ldap method
+// are only used when spec.ldap is properly configured.
+func (v *PoolerCustomValidator) validatePgBouncerHBA(r *apiv1.Pooler) field.ErrorList {
+	var result field.ErrorList
+	if r.Spec.PgBouncer == nil {
+		return result
+	}
+	for i, rule := range r.Spec.PgBouncer.PgHBA {
+		fields := strings.Fields(rule)
+		if len(fields) >= 4 && fields[len(fields)-1] == "ldap" {
+			if r.Spec.LDAP == nil || !r.Spec.LDAP.Enabled {
+				result = append(result,
+					field.Invalid(
+						field.NewPath("spec", "pgbouncer", "pg_hba").Index(i),
+						rule,
+						"pg_hba rule uses ldap method but spec.ldap.enabled is not true: "+
+							"configure spec.ldap with host, baseDN, bindDN and credentials"))
+			}
+		}
+	}
+	return result
 }
 
 // validateLDAP checks LDAP configuration: mutual exclusivity with auth_query and required fields when enabled.
@@ -294,17 +319,21 @@ func (v *PoolerCustomValidator) validateLDAP(r *apiv1.Pooler) field.ErrorList {
 		return result
 	}
 
-	// LDAP and auth_query are mutually exclusive
+	// In HBA mode (pg_hba rules defined), auth_query is allowed alongside LDAP
+	// because some users authenticate via scram-sha-256 and need password lookup.
+	// In pure LDAP mode (no pg_hba), auth_query is mutually exclusive with LDAP.
+	isHBAMode := r.Spec.PgBouncer != nil && len(r.Spec.PgBouncer.PgHBA) > 0
 	hasAuthQuery := r.Spec.PgBouncer != nil && (
 		r.Spec.PgBouncer.AuthQuery != "" ||
 			(r.Spec.PgBouncer.AuthQuerySecret != nil && r.Spec.PgBouncer.AuthQuerySecret.Name != ""))
-	if hasAuthQuery {
+	if hasAuthQuery && !isHBAMode {
 		result = append(result,
 			field.Invalid(
 				field.NewPath("spec", "ldap"),
 				ldap.Enabled,
 				"LDAP authentication and auth_query are mutually exclusive: when spec.ldap.enabled is true, "+
-					"do not set spec.pgbouncer.authQuery or spec.pgbouncer.authQuerySecret"))
+					"do not set spec.pgbouncer.authQuery or spec.pgbouncer.authQuerySecret "+
+					"(unless spec.pgbouncer.pg_hba is also set for mixed authentication)"))
 		return result
 	}
 
@@ -332,7 +361,24 @@ func (v *PoolerCustomValidator) validateLDAP(r *apiv1.Pooler) field.ErrorList {
 			field.Required(
 				field.NewPath("spec", "ldap", "credentials", "secretName"),
 				"LDAP credentials.secretName is required when spec.ldap.enabled is true: "+
-					"reference a Secret containing the bind password (key: password or bindPassword)"))
+					"reference a Secret containing the bind password (key: password)"))
+	}
+
+	// Reject double-quote characters in fields that are embedded verbatim into
+	// the PgBouncer .ini auth_ldap_options value. An unescaped " would break
+	// the key="value" format and could allow option injection.
+	for _, f := range []struct{ val, name string }{
+		{ldap.Host, "host"},
+		{ldap.BindDN, "bindDN"},
+		{ldap.BaseDN, "baseDN"},
+	} {
+		if strings.Contains(f.val, `"`) {
+			result = append(result,
+				field.Invalid(
+					field.NewPath("spec", "ldap", f.name),
+					f.val,
+					"value must not contain double-quote characters"))
+		}
 	}
 
 	return result
